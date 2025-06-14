@@ -1,0 +1,98 @@
+name: Build Multi-Platform Binaries
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          # Linux builds
+          - os: linux
+            arch: x86_64
+            runner: ubuntu-latest
+            cc: gcc
+            target: x86_64-linux-gnu
+          - os: linux
+            arch: arm64
+            runner: ubuntu-latest
+            cc: aarch64-linux-gnu-gcc
+            target: aarch64-linux-gnu
+          
+          # macOS builds
+          - os: macos
+            arch: x86_64
+            runner: macos-13
+            cc: clang
+            target: x86_64-apple-darwin
+          - os: macos
+            arch: arm64
+            runner: macos-14
+            cc: clang
+            target: arm64-apple-darwin
+          
+          # Windows builds
+          - os: windows
+            arch: x86_64
+            runner: windows-latest
+            cc: gcc
+            target: x86_64-w64-mingw32
+          - os: windows
+            arch: arm64
+            runner: windows-latest
+            cc: gcc
+            target: aarch64-w64-mingw32
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Linux cross-compilation
+      if: matrix.os == 'linux' && matrix.arch == 'arm64'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu
+
+    - name: Setup Windows cross-compilation
+      if: matrix.os == 'windows'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-make
+
+    - name: Build binary (Linux/macOS)
+      if: matrix.os != 'windows'
+      run: |
+        if [ "${{ matrix.arch }}" = "arm64" ] && [ "${{ matrix.os }}" = "linux" ]; then
+          export CC=${{ matrix.cc }}
+          export CFLAGS="-static"
+        fi
+        make CC=${{ matrix.cc }}
+        
+        # Rename binary with platform suffix
+        if [ "${{ matrix.os }}" = "linux" ]; then
+          mv mfkey_desktop mfkey_desktop-${{ matrix.os }}-${{ matrix.arch }}
+        elif [ "${{ matrix.os }}" = "macos" ]; then
+          mv mfkey_desktop mfkey_desktop-${{ matrix.os }}-${{ matrix.arch }}
+        fi
+
+    - name: Build binary (Windows)
+      if: matrix.os == 'windows'
+      shell: msys2 {0}
+      run: |
+        make CC=gcc
+        mv mfkey_desktop.exe mfkey_desktop-${{ matrix.os }}-${{ matrix.arch }}.exe
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: mfkey_desktop-${{ matrix.os }}-${{ matrix.arch }}
+        path: |
+          mfkey_desktop-*
+        retention-days: 7
