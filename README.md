@@ -1,10 +1,19 @@
 # MFKey Desktop: MIFARE Classic Key Recovery
 
-A simple C tool for recovering MIFARE Classic keys on desktop, ported from the FlipperZero mfkey plugin.
+Desktop tool for recovering MIFARE Classic keys, modified to match Flipper Zero mfkey behavior.
 
 ## Usage
+
 ```bash
-./mfkey_desktop <input_file> [output_file]
+./mfkey_desktop <nested.log> [keys.txt] [dict_dir]
 ```
-- `input_file`: Path to `.nested.log` file
-- `output_file`: (optional) Output file for keys (default: `found_keys.txt`)
+
+- `nested.log`: Input nonce file (required)
+- `keys.txt`: Output for direct keys (default: found_keys.txt)  
+- `dict_dir`: Directory for candidate dictionaries (default: current dir)
+
+## Build
+
+```bash
+make
+```

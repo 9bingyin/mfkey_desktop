@@ -104,6 +104,10 @@ static MfClassicKey* found_keys = NULL;
 static int found_key_count = 0;
 static bool stop_attack = false;
 
+// Global variables for tracking candidate keys (static_encrypted)
+static MfClassicKey* candidate_keys = NULL;
+static int candidate_key_count = 0;
+
 // Global progress tracking variables
 static int current_nonce = 0;
 static int total_nonces = 0;
@@ -289,6 +293,20 @@ void crypto1_get_lfsr(struct Crypto1State* state, MfClassicKey* lfsr) {
     }
 }
 
+// Add candidate key to the list (for static_encrypted)
+void add_candidate_key(MfClassicKey* key) {
+    // Check if key already exists in candidates
+    for(int i = 0; i < candidate_key_count; i++) {
+        if(memcmp(candidate_keys[i].data, key->data, MF_CLASSIC_KEY_SIZE) == 0) {
+            return; // Already found
+        }
+    }
+    
+    candidate_keys = realloc(candidate_keys, sizeof(MfClassicKey) * (candidate_key_count + 1));
+    candidate_keys[candidate_key_count] = *key;
+    candidate_key_count++;
+}
+
 // Add found key to the list
 void add_found_key(MfClassicKey* key) {
     // Check if key already exists
@@ -345,9 +363,9 @@ static inline int check_state(struct Crypto1State* t, MfClassicNonce* n) {
             if((crypt_word_par(&temp, n->uid_xor_nt0, 0, n->nt0, &local_parity_keystream_bits) ==
                 n->ks1_1_enc) &&
                (local_parity_keystream_bits == n->par_1)) {
+                // Found key candidate - add to candidates list
                 crypto1_get_lfsr(t, &(n->key));
-                add_found_key(&(n->key));
-                return 1;
+                add_candidate_key(&(n->key));
             }
         }
     }
@@ -811,11 +829,47 @@ void save_keys_to_file(const char* filename) {
     printf("Keys saved successfully!\n");
 }
 
+void save_candidate_keys_to_dict(uint32_t uid, const char* output_dir) {
+    if(candidate_key_count == 0) {
+        printf("No candidate keys found to save.\n");
+        return;
+    }
+    
+    char dict_filename[256];
+    if(output_dir) {
+        snprintf(dict_filename, sizeof(dict_filename), "%s/mf_classic_dict_%08x.nfc", output_dir, uid);
+    } else {
+        snprintf(dict_filename, sizeof(dict_filename), "mf_classic_dict_%08x.nfc", uid);
+    }
+    
+    FILE* file = fopen(dict_filename, "w");
+    if(!file) {
+        printf("Failed to create dictionary file: %s\n", dict_filename);
+        return;
+    }
+    
+    printf("Saving %d candidate keys to dictionary file: %s\n", candidate_key_count, dict_filename);
+    
+    for(int i = 0; i < candidate_key_count; i++) {
+        for(int j = 0; j < MF_CLASSIC_KEY_SIZE; j++) {
+            fprintf(file, "%02X", candidate_keys[i].data[j]);
+        }
+        fprintf(file, "\n");
+    }
+    
+    fclose(file);
+    printf("Candidate keys dictionary saved successfully!\n");
+    printf("Note: These are candidate keys that need to be verified with the actual card.\n");
+}
+
 void print_usage(const char* program_name) {
-    printf("Usage: %s <nested.log file> [output_keys.txt]\n", program_name);
+    printf("Usage: %s <nested.log file> [output_keys.txt] [dict_output_dir]\n", program_name);
     printf("  nested.log file: Input file containing nested attack nonces\n");
     printf("  output_keys.txt: Optional output file for found keys (default: found_keys.txt)\n");
-    printf("\nExample: %s /path/to/.nested.log keys.txt\n", program_name);
+    printf("  dict_output_dir: Optional directory for candidate key dictionaries (default: current dir)\n");
+    printf("\nExample: %s /path/to/.nested.log keys.txt ./dicts/\n", program_name);
+    printf("\nNote: For static_encrypted attacks, candidate keys will be saved to\n");
+    printf("      mf_classic_dict_<UID>.nfc files that need verification with actual cards.\n");
 }
 
 // Progress bar display function - simple version
@@ -865,11 +919,15 @@ int main(int argc, char* argv[]) {
     
     const char* input_file = argv[1];
     const char* output_file = (argc > 2) ? argv[2] : "found_keys.txt";
+    const char* dict_output_dir = (argc > 3) ? argv[3] : NULL;
     
     printf("MIFARE Classic Key Recovery Tool\n");
     printf("================================================================================\n");
     printf("Input file:  %s\n", input_file);
     printf("Output file: %s\n", output_file);
+    if(dict_output_dir) {
+        printf("Dict output dir: %s\n", dict_output_dir);
+    }
     printf("================================================================================\n");
     printf("\n");
     
@@ -883,6 +941,17 @@ int main(int argc, char* argv[]) {
     
     total_nonces = nonce_count;
     global_total_nonces = nonce_count;
+    
+    // Check if we have any static_encrypted nonces
+    bool has_static_encrypted = false;
+    uint32_t static_encrypted_uid = 0;
+    for(int i = 0; i < nonce_count; i++) {
+        if(nonces[i].attack == static_encrypted) {
+            has_static_encrypted = true;
+            static_encrypted_uid = nonces[i].uid;
+            break;
+        }
+    }
     
     printf("Starting key recovery... (Press Ctrl+C to stop gracefully.)\n\n");
     
@@ -914,9 +983,9 @@ int main(int argc, char* argv[]) {
     printf("\n");
     printf("Key recovery completed!\n");
     
-    printf("Total unique keys found: %d\n\n", found_key_count);
-    
+    // Handle static_nested and mfkey32 results
     if(found_key_count > 0) {
+        printf("Total unique keys found: %d\n\n", found_key_count);
         printf("Found keys:\n");
         for(int i = 0; i < found_key_count; i++) {
             printf("Key %d: ", i + 1);
@@ -928,7 +997,29 @@ int main(int argc, char* argv[]) {
         printf("\n");
         
         save_keys_to_file(output_file);
-    } else {
+    }
+    
+    // Handle static_encrypted results
+    if(has_static_encrypted) {
+        printf("Static encrypted candidate keys: %d\n\n", candidate_key_count);
+        if(candidate_key_count > 0) {
+            printf("Candidate keys (need verification):\n");
+            for(int i = 0; i < candidate_key_count; i++) {
+                printf("Candidate %d: ", i + 1);
+                for(int j = 0; j < MF_CLASSIC_KEY_SIZE; j++) {
+                    printf("%02X", candidate_keys[i].data[j]);
+                }
+                printf("\n");
+            }
+            printf("\n");
+            
+            save_candidate_keys_to_dict(static_encrypted_uid, dict_output_dir);
+        } else {
+            printf("No candidate keys found for static encrypted attack.\n");
+        }
+    }
+    
+    if(found_key_count == 0 && candidate_key_count == 0) {
         printf("No keys were recovered. This could happen if:\n");
         printf("  * The nonces are invalid or corrupted\n");
         printf("  * The keyspace being searched doesn't contain the key\n");
@@ -938,6 +1029,7 @@ int main(int argc, char* argv[]) {
     // Cleanup
     if(nonces) free(nonces);
     if(found_keys) free(found_keys);
+    if(candidate_keys) free(candidate_keys);
     
     return 0;
 }
