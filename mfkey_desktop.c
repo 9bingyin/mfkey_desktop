@@ -310,11 +310,6 @@ void add_candidate_key(MfClassicKey* key) {
     candidate_keys = realloc(candidate_keys, sizeof(MfClassicKey) * (candidate_key_count + 1));
     candidate_keys[candidate_key_count] = *key;
     candidate_key_count++;
-    
-    // Show candidate key in pixel UI (only first few to avoid spam)
-    if (candidate_key_count <= 3) {
-        pixel_ui_show_candidate_key(key->data);
-    }
 }
 
 // Add found key to the list

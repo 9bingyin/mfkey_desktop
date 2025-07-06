@@ -245,7 +245,10 @@ void pixel_ui_show_found_key(const uint8_t* key_data, const char* attack_type) {
     for(int i = 0; i < 6; i++) {
         printf("%02X", key_data[i]);
     }
-    printf(" [%s]", attack_type);
+    // Only show attack type if it's not empty
+    if (attack_type && strlen(attack_type) > 0) {
+        printf(" [%s]", attack_type);
+    }
     if (ui_options.use_colors) printf(COLOR_RESET);
     printf("\n");
     fflush(stdout);
@@ -271,7 +274,12 @@ void pixel_ui_show_candidate_key(const uint8_t* key_data) {
 
 void pixel_ui_show_summary(int total_nonces, int found_keys, int candidate_keys) {
     if (ui_options.no_ui) {
-        printf("\nKey recovery completed!\n");
+        printf("\n================================================================================\n");
+        printf("Key recovery completed!\n\n");
+        printf("Summary:\n");
+        printf("Total nonces processed: %d\n", total_nonces);
+        printf("Keys found: %d\n", found_keys);
+        printf("Candidate keys: %d\n", candidate_keys);
         return;
     }
     
@@ -297,7 +305,19 @@ void pixel_ui_show_summary(int total_nonces, int found_keys, int candidate_keys)
 }
 
 void pixel_ui_show_found_keys_list(const uint8_t keys[][6], int count) {
-    if (ui_options.no_ui || count == 0) return;
+    if (count == 0) return;
+    
+    if (ui_options.no_ui) {
+        printf("\nFound Keys:\n");
+        for(int i = 0; i < count; i++) {
+            printf("  ");
+            for(int j = 0; j < 6; j++) {
+                printf("%02X", keys[i][j]);
+            }
+            printf("\n");
+        }
+        return;
+    }
     
     printf("\nFound Keys:\n");
     for(int i = 0; i < count; i++) {
@@ -312,30 +332,43 @@ void pixel_ui_show_found_keys_list(const uint8_t keys[][6], int count) {
 }
 
 void pixel_ui_show_candidate_keys_summary(int count) {
-    if (ui_options.no_ui || count == 0) return;
-    
-    printf("\nCandidate Keys (%d total):\n", count);
-    if (ui_options.use_colors) printf(COLOR_YELLOW);
-    if (count > 3) {
-        printf("  ? (showing first 3 of %d candidates)\n", count);
-    }
-    printf("  ... use verification tool to test candidates\n");
-    if (ui_options.use_colors) printf(COLOR_RESET);
+    // Don't show anything here - we'll show in the saved files section
+    (void)count; // Suppress unused parameter warning
+    return;
 }
 
 void pixel_ui_show_saved_files(const char* keys_file, int keys_count, 
                               const char* dict_file, int candidates_count) {
     if (ui_options.no_ui) {
+        // Non-GUI mode output
+        if (candidates_count > 0 && dict_file) {
+            printf("\nCandidate Keys (%d total):\n", candidates_count);
+            const char* filename = strrchr(dict_file, '/');
+            filename = filename ? filename + 1 : dict_file;
+            printf("  Saved to: %s\n", filename);
+            printf("  These keys need verification with actual card\n");
+        }
+        
+        printf("\nFiles saved:\n");
         if (keys_count > 0) {
-            printf("Saving %d keys to %s...\n", keys_count, keys_file);
-            printf("Keys saved successfully!\n");
+            printf("  %s (%d keys)\n", keys_file, keys_count);
         }
         if (candidates_count > 0 && dict_file) {
-            printf("Saving %d candidate keys to dictionary file: %s\n", candidates_count, dict_file);
-            printf("Candidate keys dictionary saved successfully!\n");
-            printf("Note: These are candidate keys that need to be verified with the actual card.\n");
+            printf("  %s (%d candidates)\n", dict_file, candidates_count);
         }
         return;
+    }
+    
+    // GUI mode output
+    if (candidates_count > 0 && dict_file) {
+        printf("\nCandidate Keys (%d total):\n", candidates_count);
+        if (ui_options.use_colors) printf(COLOR_YELLOW);
+        // Extract just the filename from the full path
+        const char* filename = strrchr(dict_file, '/');
+        filename = filename ? filename + 1 : dict_file;
+        printf("  ? Saved to: %s\n", filename);
+        printf("  ? These keys need verification with actual card\n");
+        if (ui_options.use_colors) printf(COLOR_RESET);
     }
     
     printf("\nFiles saved:\n");
@@ -349,11 +382,6 @@ void pixel_ui_show_saved_files(const char* keys_file, int keys_count,
     if (candidates_count > 0 && dict_file) {
         if (ui_options.use_colors) printf(COLOR_YELLOW);
         printf("  ▸ %s (%d candidates)\n", dict_file, candidates_count);
-        if (ui_options.use_colors) printf(COLOR_RESET);
-        
-        printf("\n");
-        if (ui_options.use_colors) printf(COLOR_YELLOW);
-        printf("Note: Candidate keys need verification with actual card.\n");
         if (ui_options.use_colors) printf(COLOR_RESET);
     }
 }
