@@ -1,0 +1,29 @@
+# Memory files
+CLAUDE.md
+
+# Build artifacts
+*.o
+*.exe
+mfkey_desktop
+
+# Output files
+keys.txt
+mf_classic_dict_*.nfc
+*.log
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Dependencies
+*.d
