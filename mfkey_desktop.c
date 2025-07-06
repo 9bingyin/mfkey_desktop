@@ -7,6 +7,10 @@
 #include <signal.h>
 #include "pixel_ui.h"
 
+// Version information
+#define MFKEY_VERSION "1.0"
+#define MFKEY_NAME "mfkey_desktop"
+
 // MIFARE Classic key size
 #define MF_CLASSIC_KEY_SIZE 6
 
@@ -860,14 +864,20 @@ void save_candidate_keys_to_dict(uint32_t uid, const char* output_dir) {
 }
 
 void print_usage(const char* program_name) {
-    printf("Usage: %s <nested.log file> [output_keys.txt] [dict_output_dir] [--no-ui]\n", program_name);
-    printf("  nested.log file: Input file containing nested attack nonces\n");
-    printf("  output_keys.txt: Optional output file for found keys (default: found_keys.txt)\n");
-    printf("  dict_output_dir: Optional directory for candidate key dictionaries (default: current dir)\n");
-    printf("  --no-ui:         Disable pixel UI and use simple text output\n");
-    printf("\nExample: %s /path/to/.nested.log keys.txt ./dicts/\n", program_name);
-    printf("\nNote: For static_encrypted attacks, candidate keys will be saved to\n");
-    printf("      mf_classic_dict_<UID>.nfc files that need verification with actual cards.\n");
+    printf("%s - MIFARE Classic Key Recovery Tool\n", MFKEY_NAME);
+    printf("Version %s\n\n", MFKEY_VERSION);
+    
+    printf("Usage: %s [OPTIONS] <nonces.log> [output_keys.txt] [dict_output_dir]\n\n", program_name);
+    
+    printf("ARGUMENTS:\n");
+    printf("  nonces.log        Input file containing nonces from nested attack\n");
+    printf("  output_keys.txt   Output file for recovered keys (default: found_keys.txt)\n");
+    printf("  dict_output_dir   Directory for candidate key dictionaries (default: current dir)\n\n");
+    
+    printf("OPTIONS:\n");
+    printf("  -h, --help        Show this help message and exit\n");
+    printf("  --no-ui           Disable pixel UI and use simple text output\n");
+    printf("  --version         Show version information\n");
 }
 
 // Progress bar display function - simple version
@@ -915,6 +925,21 @@ void signal_handler(int sig) {
 int main(int argc, char* argv[]) {
     signal(SIGINT, signal_handler);
     
+    // Check for help or version first (before other argument checks)
+    for(int i = 1; i < argc; i++) {
+        if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        }
+        if(strcmp(argv[i], "--version") == 0) {
+            printf("%s version %s\n", MFKEY_NAME, MFKEY_VERSION);
+            printf("MIFARE Classic Key Recovery Tool\n");
+            printf("Based on Flipper Zero mfkey implementation\n");
+            return 0;
+        }
+    }
+    
+    // Now check for minimum arguments
     if(argc < 2) {
         print_usage(argv[0]);
         return 1;
