@@ -5,6 +5,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <signal.h>
+#include "pixel_ui.h"
 
 // MIFARE Classic key size
 #define MF_CLASSIC_KEY_SIZE 6
@@ -116,10 +117,14 @@ static int total_msb_rounds = 0;
 static int global_current_nonce = 0;
 static int global_total_nonces = 0;
 
+// UI options
+static UIOptions ui_options = {false, true};
+
 // Function declarations
 void print_progress_bar(float percentage, int width);
-void print_simple_progress(int nonce_current, int nonce_total, int msb_current, int msb_total, float msb_progress);
+void print_simple_progress(int nonce_current, int nonce_total, int msb_current, int msb_total, float msb_progress, uint32_t current_uid);
 void signal_handler(int sig);
+void print_usage(const char* program_name);
 
 // Crypto1 functions
 static inline uint8_t evenparity32(uint32_t x) {
@@ -305,6 +310,11 @@ void add_candidate_key(MfClassicKey* key) {
     candidate_keys = realloc(candidate_keys, sizeof(MfClassicKey) * (candidate_key_count + 1));
     candidate_keys[candidate_key_count] = *key;
     candidate_key_count++;
+    
+    // Show candidate key in pixel UI (only first few to avoid spam)
+    if (candidate_key_count <= 3) {
+        pixel_ui_show_candidate_key(key->data);
+    }
 }
 
 // Add found key to the list
@@ -320,12 +330,8 @@ void add_found_key(MfClassicKey* key) {
     found_keys[found_key_count] = *key;
     found_key_count++;
     
-    // Print key found message on new line
-    printf("\nFound key: ");
-    for(int i = 0; i < MF_CLASSIC_KEY_SIZE; i++) {
-        printf("%02X", key->data[i]);
-    }
-    printf("\n");
+    // Use pixel UI to show found key
+    pixel_ui_show_found_key(key->data, "");
 }
 
 static inline int check_state(struct Crypto1State* t, MfClassicNonce* n) {
@@ -564,7 +570,8 @@ int calculate_msb_tables(
     struct Msb* even_msbs,
     unsigned int* temp_states_odd,
     unsigned int* temp_states_even,
-    unsigned int in) {
+    unsigned int in,
+    uint32_t uid) {
     
     unsigned int msb_head = (MSB_LIMIT * msb_round);
     unsigned int msb_tail = (MSB_LIMIT * (msb_round + 1));
@@ -582,7 +589,7 @@ int calculate_msb_tables(
         if(semi_state % 65536 == 0) {
             // Calculate progress percentage
             float progress = (float)(1048576 - semi_state) / 1048576.0 * 100.0;
-            print_simple_progress(global_current_nonce, global_total_nonces, current_msb_round, total_msb_rounds, progress);
+            print_simple_progress(global_current_nonce, global_total_nonces, current_msb_round, total_msb_rounds, progress, uid);
         }
 
         if(filter(semi_state) == (oks & 1)) {
@@ -706,7 +713,8 @@ bool recover(MfClassicNonce* n, int ks2, unsigned int in) {
             even_msbs,
             temp_states_odd,
             temp_states_even,
-            in)) {
+            in,
+            n->uid)) {
             found = true;
             // Key found message will be printed by add_found_key function
             break;
@@ -716,7 +724,7 @@ bool recover(MfClassicNonce* n, int ks2, unsigned int in) {
         }
         
         // Complete current MSB round
-        print_simple_progress(global_current_nonce, global_total_nonces, current_msb_round, total_msb_rounds, 100.0);
+        print_simple_progress(global_current_nonce, global_total_nonces, current_msb_round, total_msb_rounds, 100.0, n->uid);
     }
     
     // Free allocated memory
@@ -752,7 +760,7 @@ bool load_nested_nonces(const char* filename, MfClassicNonce** nonces, int* nonc
     int count = 0;
     MfClassicNonce* nonce_array = NULL;
     
-    printf("Loading nonces from %s...\n", filename);
+    // Loading message is now handled by pixel_ui_show_loading in main
     
     while(fgets(line, sizeof(line), file)) {
         // Only process lines ending with "dist 0"
@@ -789,8 +797,7 @@ bool load_nested_nonces(const char* filename, MfClassicNonce** nonces, int* nonc
             nonce_array[count] = nonce;
             count++;
             
-            printf("Loaded nonce %d: UID=0x%08X, attack=%s\n", 
-                count, nonce.uid, 
+            pixel_ui_show_nonce_loaded(count, nonce.uid, 
                 (nonce.attack == static_nested) ? "static_nested" : "static_encrypted");
         }
     }
@@ -800,13 +807,12 @@ bool load_nested_nonces(const char* filename, MfClassicNonce** nonces, int* nonc
     *nonces = nonce_array;
     *nonce_count = count;
     
-    printf("Total nonces loaded: %d\n\n", count);
+    pixel_ui_show_loading_complete(count);
     return count > 0;
 }
 
 void save_keys_to_file(const char* filename) {
     if(found_key_count == 0) {
-        printf("No keys found to save.\n");
         return;
     }
     
@@ -816,7 +822,7 @@ void save_keys_to_file(const char* filename) {
         return;
     }
     
-    printf("Saving %d keys to %s...\n", found_key_count, filename);
+    // Pixel UI will show saved files info at the end
     
     for(int i = 0; i < found_key_count; i++) {
         for(int j = 0; j < MF_CLASSIC_KEY_SIZE; j++) {
@@ -826,12 +832,10 @@ void save_keys_to_file(const char* filename) {
     }
     
     fclose(file);
-    printf("Keys saved successfully!\n");
 }
 
 void save_candidate_keys_to_dict(uint32_t uid, const char* output_dir) {
     if(candidate_key_count == 0) {
-        printf("No candidate keys found to save.\n");
         return;
     }
     
@@ -848,7 +852,7 @@ void save_candidate_keys_to_dict(uint32_t uid, const char* output_dir) {
         return;
     }
     
-    printf("Saving %d candidate keys to dictionary file: %s\n", candidate_key_count, dict_filename);
+    // Pixel UI will show saved files info at the end
     
     for(int i = 0; i < candidate_key_count; i++) {
         for(int j = 0; j < MF_CLASSIC_KEY_SIZE; j++) {
@@ -858,15 +862,14 @@ void save_candidate_keys_to_dict(uint32_t uid, const char* output_dir) {
     }
     
     fclose(file);
-    printf("Candidate keys dictionary saved successfully!\n");
-    printf("Note: These are candidate keys that need to be verified with the actual card.\n");
 }
 
 void print_usage(const char* program_name) {
-    printf("Usage: %s <nested.log file> [output_keys.txt] [dict_output_dir]\n", program_name);
+    printf("Usage: %s <nested.log file> [output_keys.txt] [dict_output_dir] [--no-ui]\n", program_name);
     printf("  nested.log file: Input file containing nested attack nonces\n");
     printf("  output_keys.txt: Optional output file for found keys (default: found_keys.txt)\n");
     printf("  dict_output_dir: Optional directory for candidate key dictionaries (default: current dir)\n");
+    printf("  --no-ui:         Disable pixel UI and use simple text output\n");
     printf("\nExample: %s /path/to/.nested.log keys.txt ./dicts/\n", program_name);
     printf("\nNote: For static_encrypted attacks, candidate keys will be saved to\n");
     printf("      mf_classic_dict_<UID>.nfc files that need verification with actual cards.\n");
@@ -889,16 +892,21 @@ void print_progress_bar(float percentage, int width) {
 }
 
 // Simple progress display - no cursor manipulation
-void print_simple_progress(int nonce_current, int nonce_total, int msb_current, int msb_total, float msb_progress) {
-    // Calculate overall progress
-    float nonce_percentage = (float)nonce_current / nonce_total * 100.0;
-    float msb_percentage = (float)msb_current / msb_total * 100.0;
-    
-    printf("\rProgress: Nonce %d/%d (%.1f%%) | MSB %d/%d (%.1f%%) | Current %.1f%%", 
-           nonce_current, nonce_total, nonce_percentage,
-           msb_current, msb_total, msb_percentage,
-           msb_progress);
-    fflush(stdout);
+void print_simple_progress(int nonce_current, int nonce_total, int msb_current, int msb_total, float msb_progress, uint32_t current_uid) {
+    if (ui_options.no_ui) {
+        // Calculate overall progress
+        float nonce_percentage = (float)nonce_current / nonce_total * 100.0;
+        float msb_percentage = (float)msb_current / msb_total * 100.0;
+        
+        printf("\rProgress: Nonce %d/%d (%.1f%%) | MSB %d/%d (%.1f%%) | Current %.1f%%", 
+               nonce_current, nonce_total, nonce_percentage,
+               msb_current, msb_total, msb_percentage,
+               msb_progress);
+        fflush(stdout);
+    } else {
+        // Use pixel UI for progress
+        pixel_ui_update_progress(nonce_current, nonce_total, msb_current, msb_total, msb_progress, current_uid);
+    }
 }
 
 // Add signal handling for Ctrl+C
@@ -917,22 +925,34 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
+    // Parse arguments
     const char* input_file = argv[1];
-    const char* output_file = (argc > 2) ? argv[2] : "found_keys.txt";
-    const char* dict_output_dir = (argc > 3) ? argv[3] : NULL;
+    const char* output_file = "found_keys.txt";
+    const char* dict_output_dir = NULL;
     
-    printf("MIFARE Classic Key Recovery Tool\n");
-    printf("================================================================================\n");
-    printf("Input file:  %s\n", input_file);
-    printf("Output file: %s\n", output_file);
-    if(dict_output_dir) {
-        printf("Dict output dir: %s\n", dict_output_dir);
+    // Check for UI options and other arguments
+    for(int i = 2; i < argc; i++) {
+        if(strcmp(argv[i], "--no-ui") == 0) {
+            ui_options.no_ui = true;
+        } else if(output_file == (const char*)"found_keys.txt") {
+            output_file = argv[i];
+        } else if(dict_output_dir == NULL) {
+            dict_output_dir = argv[i];
+        }
     }
-    printf("================================================================================\n");
-    printf("\n");
+    
+    // Initialize pixel UI
+    pixel_ui_init(&ui_options);
+    
+    // Show title and configuration
+    pixel_ui_show_title();
+    pixel_ui_show_config(input_file, output_file, dict_output_dir);
     
     MfClassicNonce* nonces = NULL;
     int nonce_count = 0;
+    
+    // Show loading message
+    pixel_ui_show_loading(input_file);
     
     if(!load_nested_nonces(input_file, &nonces, &nonce_count)) {
         printf("Failed to load nonces from file!\n");
@@ -953,7 +973,7 @@ int main(int argc, char* argv[]) {
         }
     }
     
-    printf("Starting key recovery... (Press Ctrl+C to stop gracefully.)\n\n");
+    pixel_ui_show_start();
     
     for(int i = 0; i < nonce_count && !stop_attack; i++) {
         current_nonce = i + 1;
@@ -979,51 +999,45 @@ int main(int argc, char* argv[]) {
         recover(nonce, ks_enc, nt_xor_uid);
     }
     
-    // Clear progress line and show completion
-    printf("\n");
-    printf("Key recovery completed!\n");
+    // Show completion summary
+    pixel_ui_show_summary(nonce_count, found_key_count, candidate_key_count);
     
     // Handle static_nested and mfkey32 results
     if(found_key_count > 0) {
-        printf("Total unique keys found: %d\n\n", found_key_count);
-        printf("Found keys:\n");
+        // Convert found keys to 2D array for display
+        uint8_t (*keys_array)[6] = (uint8_t (*)[6])malloc(found_key_count * sizeof(*keys_array));
         for(int i = 0; i < found_key_count; i++) {
-            printf("Key %d: ", i + 1);
-            for(int j = 0; j < MF_CLASSIC_KEY_SIZE; j++) {
-                printf("%02X", found_keys[i].data[j]);
-            }
-            printf("\n");
+            memcpy(keys_array[i], found_keys[i].data, MF_CLASSIC_KEY_SIZE);
         }
-        printf("\n");
+        pixel_ui_show_found_keys_list(keys_array, found_key_count);
+        free(keys_array);
         
         save_keys_to_file(output_file);
     }
     
     // Handle static_encrypted results
-    if(has_static_encrypted) {
-        printf("Static encrypted candidate keys: %d\n\n", candidate_key_count);
-        if(candidate_key_count > 0) {
-            printf("Candidate keys (need verification):\n");
-            for(int i = 0; i < candidate_key_count; i++) {
-                printf("Candidate %d: ", i + 1);
-                for(int j = 0; j < MF_CLASSIC_KEY_SIZE; j++) {
-                    printf("%02X", candidate_keys[i].data[j]);
-                }
-                printf("\n");
-            }
-            printf("\n");
-            
-            save_candidate_keys_to_dict(static_encrypted_uid, dict_output_dir);
+    if(has_static_encrypted && candidate_key_count > 0) {
+        pixel_ui_show_candidate_keys_summary(candidate_key_count);
+        save_candidate_keys_to_dict(static_encrypted_uid, dict_output_dir);
+    }
+    
+    // Show saved files info
+    char dict_filename[256] = {0};
+    if(has_static_encrypted && candidate_key_count > 0) {
+        if(dict_output_dir) {
+            snprintf(dict_filename, sizeof(dict_filename), "%s/mf_classic_dict_%08x.nfc", dict_output_dir, static_encrypted_uid);
         } else {
-            printf("No candidate keys found for static encrypted attack.\n");
+            snprintf(dict_filename, sizeof(dict_filename), "mf_classic_dict_%08x.nfc", static_encrypted_uid);
         }
     }
     
+    pixel_ui_show_saved_files(
+        found_key_count > 0 ? output_file : NULL, found_key_count,
+        candidate_key_count > 0 ? dict_filename : NULL, candidate_key_count
+    );
+    
     if(found_key_count == 0 && candidate_key_count == 0) {
-        printf("No keys were recovered. This could happen if:\n");
-        printf("  * The nonces are invalid or corrupted\n");
-        printf("  * The keyspace being searched doesn't contain the key\n");
-        printf("  * The attack was interrupted before completion\n\n");
+        pixel_ui_show_no_keys_found();
     }
     
     // Cleanup
