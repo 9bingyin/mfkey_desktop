@@ -194,13 +194,6 @@ static inline void update_contribution(unsigned int data[], int item, int mask1,
     data[item] = p << 24 | (data[item] & 0xffffff);
 }
 
-static inline uint32_t prng_successor(uint32_t x, uint32_t n) {
-    SWAPENDIAN(x);
-    while(n--)
-        x = x >> 1 | (x >> 16 ^ x >> 18 ^ x >> 19 ^ x >> 21) << 31;
-    return SWAPENDIAN(x);
-}
-
 static inline uint32_t crypt_word(struct Crypto1State* s) {
     uint32_t res_ret = 0;
     uint32_t feedin, t;
@@ -954,7 +947,7 @@ int main(int argc, char* argv[]) {
     for(int i = 2; i < argc; i++) {
         if(strcmp(argv[i], "--no-ui") == 0) {
             ui_options.no_ui = true;
-        } else if(output_file == (const char*)"found_keys.txt") {
+        } else if(strcmp(output_file, "found_keys.txt") == 0) {
             output_file = argv[i];
         } else if(dict_output_dir == NULL) {
             dict_output_dir = argv[i];
@@ -982,83 +975,154 @@ int main(int argc, char* argv[]) {
     total_nonces = nonce_count;
     global_total_nonces = nonce_count;
     
-    // Check if we have any static_encrypted nonces
-    bool has_static_encrypted = false;
-    uint32_t static_encrypted_uid = 0;
-    for(int i = 0; i < nonce_count; i++) {
-        if(nonces[i].attack == static_encrypted) {
-            has_static_encrypted = true;
-            static_encrypted_uid = nonces[i].uid;
-            break;
-        }
-    }
-    
+    // 分阶段处理：
+    // 1) 先处理 static_nested（可直接恢复出密钥）
+    // 2) 再按 UID 分组处理 static_encrypted，每个 UID 生成独立字典
+
     pixel_ui_show_start();
-    
+
+    // 全局进度：累计处理的 nonce 数量（所有类型合计）
+    int processed_total = 0;
+
+    // 第一阶段：处理非 static_encrypted 的 nonce（例如 static_nested）
     for(int i = 0; i < nonce_count && !stop_attack; i++) {
-        current_nonce = i + 1;
-        global_current_nonce = i + 1;
+        if(nonces[i].attack == static_encrypted) continue;
+        processed_total++;
+        current_nonce = processed_total;
+        global_current_nonce = processed_total;
+        // 全局总数固定为总 nonce 数
+        global_total_nonces = nonce_count;
+
         MfClassicNonce* nonce = &nonces[i];
-        
         uint32_t ks_enc = 0, nt_xor_uid = 0;
-        
         switch(nonce->attack) {
             case static_nested:
                 ks_enc = nonce->ks1_2_enc;
                 nt_xor_uid = nonce->uid_xor_nt1;
                 break;
-            case static_encrypted:
-                ks_enc = nonce->ks1_1_enc;
-                nt_xor_uid = nonce->uid_xor_nt0;
-                break;
             default:
                 printf("Unsupported attack type: %d\n", nonce->attack);
                 continue;
         }
-        
         recover(nonce, ks_enc, nt_xor_uid);
     }
-    
-    // Show completion summary
-    pixel_ui_show_summary(nonce_count, found_key_count, candidate_key_count);
-    
-    // Handle static_nested and mfkey32 results
+
+    // 第二阶段：按 UID 分组处理 static_encrypted
+    // 统计 unique UID 列表
+    uint32_t* unique_uids = NULL;
+    int unique_count = 0;
+    for(int i = 0; i < nonce_count; i++) {
+        if(nonces[i].attack != static_encrypted) continue;
+        uint32_t uid = nonces[i].uid;
+        bool exists = false;
+        for(int j = 0; j < unique_count; j++) {
+            if(unique_uids[j] == uid) { exists = true; break; }
+        }
+        if(!exists) {
+            unique_uids = realloc(unique_uids, sizeof(uint32_t) * (unique_count + 1));
+            unique_uids[unique_count++] = uid;
+        }
+    }
+
+    // 保存每个 UID 的字典输出信息
+    typedef struct { uint32_t uid; int count; char path[256]; } DictOutput;
+    DictOutput* dict_outputs = NULL;
+    int dict_outputs_count = 0;
+    int candidate_total_count = 0;
+
+    for(int u = 0; u < unique_count && !stop_attack; u++) {
+        uint32_t uid = unique_uids[u];
+
+        // 统计该 UID 的 nonce 数，用于进度显示
+        int group_total = 0;
+        for(int i = 0; i < nonce_count; i++) {
+            if(nonces[i].attack == static_encrypted && nonces[i].uid == uid) group_total++;
+        }
+        if(group_total == 0) continue;
+
+        // 清空候选集合，开始本 UID 的候选生成
+        if(candidate_keys) { free(candidate_keys); candidate_keys = NULL; }
+        candidate_key_count = 0;
+
+        for(int i = 0; i < nonce_count && !stop_attack; i++) {
+            MfClassicNonce* nonce = &nonces[i];
+            if(nonce->attack != static_encrypted || nonce->uid != uid) continue;
+
+            // 使用全局累计进度，避免显示为 1/1
+            processed_total++;
+            current_nonce = processed_total;
+            global_current_nonce = processed_total;
+            global_total_nonces = nonce_count;
+
+            uint32_t ks_enc = nonce->ks1_1_enc;
+            uint32_t nt_xor_uid = nonce->uid_xor_nt0;
+            recover(nonce, ks_enc, nt_xor_uid);
+        }
+
+        // 为该 UID 写出字典（若存在候选）
+        if(candidate_key_count > 0) {
+            char dict_filename[256];
+            if(dict_output_dir) {
+                snprintf(dict_filename, sizeof(dict_filename), "%s/mf_classic_dict_%08x.nfc", dict_output_dir, uid);
+            } else {
+                snprintf(dict_filename, sizeof(dict_filename), "mf_classic_dict_%08x.nfc", uid);
+            }
+            save_candidate_keys_to_dict(uid, dict_output_dir);
+
+            // 记录输出信息
+            dict_outputs = realloc(dict_outputs, sizeof(DictOutput) * (dict_outputs_count + 1));
+            dict_outputs[dict_outputs_count].uid = uid;
+            dict_outputs[dict_outputs_count].count = candidate_key_count;
+            snprintf(dict_outputs[dict_outputs_count].path, sizeof(dict_outputs[dict_outputs_count].path), "%s", dict_filename);
+            dict_outputs_count++;
+
+            candidate_total_count += candidate_key_count;
+        }
+
+        // 清空，为下一个 UID 做准备
+        if(candidate_keys) { free(candidate_keys); candidate_keys = NULL; }
+        candidate_key_count = 0;
+    }
+
+    // 展示汇总（候选数量为所有 UID 的总和）
+    pixel_ui_show_summary(nonce_count, found_key_count, candidate_total_count);
+
+    // 展示并保存已恢复密钥
     if(found_key_count > 0) {
-        // Convert found keys to 2D array for display
         uint8_t (*keys_array)[6] = (uint8_t (*)[6])malloc(found_key_count * sizeof(*keys_array));
         for(int i = 0; i < found_key_count; i++) {
             memcpy(keys_array[i], found_keys[i].data, MF_CLASSIC_KEY_SIZE);
         }
         pixel_ui_show_found_keys_list(keys_array, found_key_count);
         free(keys_array);
-        
         save_keys_to_file(output_file);
     }
-    
-    // Handle static_encrypted results
-    if(has_static_encrypted && candidate_key_count > 0) {
-        pixel_ui_show_candidate_keys_summary(candidate_key_count);
-        save_candidate_keys_to_dict(static_encrypted_uid, dict_output_dir);
-    }
-    
-    // Show saved files info
-    char dict_filename[256] = {0};
-    if(has_static_encrypted && candidate_key_count > 0) {
-        if(dict_output_dir) {
-            snprintf(dict_filename, sizeof(dict_filename), "%s/mf_classic_dict_%08x.nfc", dict_output_dir, static_encrypted_uid);
-        } else {
-            snprintf(dict_filename, sizeof(dict_filename), "mf_classic_dict_%08x.nfc", static_encrypted_uid);
-        }
-    }
-    
+
+    // 显示保存文件：密钥文件（若有）
     pixel_ui_show_saved_files(
         found_key_count > 0 ? output_file : NULL, found_key_count,
-        candidate_key_count > 0 ? dict_filename : NULL, candidate_key_count
+        NULL, 0
     );
-    
-    if(found_key_count == 0 && candidate_key_count == 0) {
+
+    // 显示各 UID 的字典文件列表（若有）
+    if(dict_outputs_count > 0) {
+        const char** files = (const char**)malloc(sizeof(char*) * dict_outputs_count);
+        int* counts = (int*)malloc(sizeof(int) * dict_outputs_count);
+        for(int i = 0; i < dict_outputs_count; i++) {
+            files[i] = dict_outputs[i].path;
+            counts[i] = dict_outputs[i].count;
+        }
+        pixel_ui_show_saved_dicts(files, counts, dict_outputs_count);
+        free(files);
+        free(counts);
+    }
+
+    if(found_key_count == 0 && candidate_total_count == 0) {
         pixel_ui_show_no_keys_found();
     }
+
+    if(unique_uids) free(unique_uids);
+    if(dict_outputs) free(dict_outputs);
     
     // Cleanup
     if(nonces) free(nonces);

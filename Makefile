@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -O3 -Wall -Wextra -std=c99 -funroll-all-loops
+CFLAGS = -O3 -Wall -Wextra -std=c99
 TARGET = mfkey_desktop
 SOURCES = mfkey_desktop.c pixel_ui.c
 

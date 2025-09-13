@@ -408,3 +408,28 @@ void pixel_ui_show_no_keys_found(void) {
 void pixel_ui_update_animation(void) {
     animation_index = (animation_index + 1) % 4;
 }
+
+void pixel_ui_show_saved_dicts(const char* dict_files[], const int dict_counts[], int num_dicts) {
+    if (num_dicts <= 0) return;
+
+    if (ui_options.no_ui) {
+        printf("\nCandidate dictionaries (%d files):\n", num_dicts);
+        for (int i = 0; i < num_dicts; i++) {
+            const char* file = dict_files[i] ? dict_files[i] : "";
+            const char* filename = strrchr(file, '/');
+            filename = filename ? filename + 1 : file;
+            printf("  %s (%d candidates)\n", filename, dict_counts[i]);
+        }
+        return;
+    }
+
+    printf("\nCandidate dictionaries (%d files):\n", num_dicts);
+    for (int i = 0; i < num_dicts; i++) {
+        const char* file = dict_files[i] ? dict_files[i] : "";
+        const char* filename = strrchr(file, '/');
+        filename = filename ? filename + 1 : file;
+        if (ui_options.use_colors) printf(COLOR_YELLOW);
+        printf("  ▸ %s (%d candidates)\n", filename, dict_counts[i]);
+        if (ui_options.use_colors) printf(COLOR_RESET);
+    }
+}

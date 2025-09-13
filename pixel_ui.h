@@ -81,6 +81,9 @@ void pixel_ui_show_candidate_keys_summary(int count);
 void pixel_ui_show_saved_files(const char* keys_file, int keys_count, 
                                const char* dict_file, int candidates_count);
 
+// Display multiple saved candidate dictionaries (one per UID)
+void pixel_ui_show_saved_dicts(const char* dict_files[], const int dict_counts[], int num_dicts);
+
 // Display no keys found message
 void pixel_ui_show_no_keys_found(void);
 
